@@ -1,0 +1,388 @@
+Assembler Components
+Components of genome sequence assembly tools
+
+Rationale
+Genome, metagenome and transcriptome assemblers range from fully integrated to fully modular. Fully modular assembly has a number of benefits. This repository is ongoing work to define some important checkpoints in a modular assembly pipeline, along with standard input/output formats. For now we have a bias towards Illumina-type sequencing data (single reads, paired reads, mate-pairs, 10x), but we aim to make the components also compatible with 3rd generation reads.
+
+Feel free to contribute via pull-requests.
+
+File formats
+FASTQ reads
+FASTA contigs
+GFA assembly graph
+SAM/BAM or PAF alignments of reads to draft assembly
+TSV (tab-separated values) tabular data
+FASTA/FASTQ: Optional attributes are found in the comment field, and formatted as in SAM, XX:x:xxxx. The comment field follows a space in the header.
+
+FASTQ: Paired-end reads are interleaved and may be compressed. Linked read barcodes may be indicated with the BX tag.
+
+FASTA: The sequence should not be line wrapped. The FASTA file should be indexed (FAI).
+
+GFA: GFA2 is preferred over GFA1. The sequence fields may be empty (*). The sequences may be stored in an adjacent FASTA file, named for example assembly.gfa and assembly.fa.
+
+SAM/BAM: SAM/BAM files are sorted by position and indexed, unless otherwise stated. Different sequencing libraries may be indicated with the read group RG attribute.
+
+GFA record types
+GFA (S): sequence segments
+GFA (E): overlap edges
+GFA (G): gap edges
+GFA (U): unordered groups of sequence segments
+GFA (O): ordered paths of sequence segments
+GFA sequence segment attributes
+GFA (S[RC]): read counts
+GFA (S[DP]): depth of coverage
+GFA (S[CN]): copy number estimate
+File names
+An assembly is contained in a single directory. The files are named according to the pattern [0-9]+_[a-z]+\.[a-z.]+. The numeric prefixes are zero-padded and identical in length, and they indicate the stage of the assembly. A descriptive name and file type extension follow. The files may be compressed.
+
+Example
+0_pe.fq.gz
+1_unitig.gfa
+2_denoise.gfa
+3_debulge.gfa 3_debulge.bam 3_debulge.bam.bai
+4_link.gfa
+5_scaffold.gfa
+6_assembly.gfa 6_assembly.fa 6_assembly.fa.fai 6_assembly.bam 6_assembly.bam.bai
+Notation
+type1(record[attributes],…) + … → type2(record[attributes],…) + …
+
+This stage requires a file of type1 and produces a file of type2. For example, estimate copy number of unitigs. A GFA file of sequence segments and edges and a BAM or PAF file of mapped reads produces a GFA file with estimated copy numbers of unitigs.
+
+GFA (SE) + BAM/PAF → GFA (S[CN],E)
+
+Stages of genome assembly
+Preprocess reads
+Remove sequencing artifacts specific to each sequencing technology. Improve the quality of the input reads with minimal loss of information, for example heterozygous variants.
+
+FASTQ → FASTQ
+
+Trim adapter sequences
+Extract barcode sequences
+Merge overlapping paired-end reads
+Split chimeric reads
+Quality control
+Assess the quality of the sequencing, and estimate parameters of the genome.
+
+FASTQ → TSV
+
+Assess the quality of the reads
+Estimate sequencing depth
+Estimate parameters of the genome, size as size, heterozygosity, and repetitiveness
+Predict assembly parameters, such as k-mer size and minimum k-mer abundance
+Correct reads
+Correct sequencing errors in reads.
+
+FASTQ → FASTQ
+
+Unitig
+Assemble unitigs by de Bruijn graph (dBG) assembly or overlap, layout, consensus (OLC) assembly.
+
+FASTQ → GFA (SE)
+
+de Bruijn Graph (dBG)
+Count k-mers
+Filter k-mers by abundance
+Compact the graph
+Compute the sequences of the unitigs
+Overlap, layout, consensus (OLC)
+Find all pairwise overlaps of reads
+Determine the order and orientation of reads
+Compute the consensus sequences of the unitigs
+Denoise
+Remove sequencing errors from the assembly graph. Retain variants.
+
+GFA (SE) → GFA (SE)
+
+Prune tips
+Remove bulges due to sequencing errors
+Collapse variants
+Identify and/or remove variants from the graph.
+
+GFA (SE) → GFA (SE)
+
+| Identify variants | Identify bulges and create unordered groups of sequence segments. | GFA (SE) → GFA (SEU)
+| Collapse variants | Collapse bulges, possibly creating new sequence segments. | GFA (SEU) → GFA (SE)
+A single sequence or path through the bulge may be selected, or the bulge may be replaced by a consensus sequence, possibly using IUPAC ambiguity codes to represent the consensus.
+
+Map reads
+Map reads to the assembly sequences.
+
+FASTQ + GFA (S)/FASTA → BAM
+
+Estimate copy number
+Estimate the copy number of each sequence segment.
+
+GFA (SE) + BAM/PAF → GFA (S[CN],E)
+
+| Calculate depth of each sequence segment | Count mapped reads and calculate depth of coverage of each sequence segment. | GFA (SE) + BAM/PAF → GFA (S[RC,DP],E)
+| Estimate the copy number of each sequence segment | GFA (S[RC,DP],E) → GFA (S[RC,DP,CN],E)
+Note that the median depth of coverage is more robust than the mean depth of coverage to the alignment artifacts caused by collapsed repeats, misaligned reads, and other issues.
+
+Resolve repeats and scaffold
+Expand repeats, and order and orient sequence segments into contigs and scaffolds.
+
+FASTA/GFA (SE) + BAM/PAF → FASTA/GFA (SE)
+
+Contigs are contiguous sequences with no gaps. Creating contigs requires expanding the repetitive sequence found between the unique contigs. Contigs are derived from contiguous paths of sequence segments without any gaps. Scaffolds are derived from discontiguous paths of sequence segments with gaps between the segments.
+
+A tool may implement scaffolding as a single stage of assembly. Scaffolding however may be viewed as composed of the three distinct stages: link unitigs, order and orient unitigs to construct paths, and contract paths to create new sequence segments.
+
+| Link unitigs | Identify pairs of unitigs that are proximal. Estimate their relative order, orientation, and distance. | GFA (SE) + BAM/PAF → GFA (SEG)
+| Order and orient | Order and orient paths of unitigs. | GFA (SEG) → GFA (SEO)
+| Contract paths | Glue vertices of paths and replace each path with a single sequence segment. | GFA (SEO) → GFA (SE)
+Fill gaps
+Assemble the sequence found in the scaffold gaps between adjacent contigs.
+
+FASTQ + FASTA/GFA (S) → FASTA/GFA (S)
+
+Polish
+Map the reads to the assembly and correct assembly errors.
+
+FASTQ + FASTA/GFA (SE) + BAM/PAF → FASTA/GFA (SE)
+
+Visualize the assembly graph
+GFA (SE) → PNG/SVG
+
+Assess assembly quality
+Assess the contiguity and correctness of the assembly.
+
+FASTA/GFA (S) → TSV
+
+Compute assembly metrics, such as N50 and NG50
+Align the assembly to the reference genome
+Compute assembly metrics, such as NGA50 and number of misassemblies
+Tools
+ABySS
+Bandage
+BCALM2
+BCOOL
+BFC
+BGREAT2
+EMA
+FastQC
+GenomeScope
+KmerGenie
+lh3/gfa1
+Long Ranger
+Nanopolish
+ntCard
+NxTrim
+Pilon
+Porechop
+QUAST
+Racon
+SGA
+Tigmint
+Trimadap
+Unicycler
+A tool may combine multiple assembly stages in a single tool.
+
+Preprocess reads
+Illumina mate-pair
+NxTrim
+Illumina paired-end
+Trimadap
+Linked reads
+EMA ema preprocess
+Long Ranger longranger basic
+Nanopore
+Porechop
+Quality control
+FastQC
+GenomeScope
+KmerGenie
+ntCard
+SGA sga preqc
+Correct reads
+BFC bfc
+BCOOL Bcool.py
+SGA sga index | sga correct
+Unitig
+ABySS ABYSS or ABYSS-P or abyss-bloom-dbg then AdjList or abyss-overlap
+BCALM2 bcalm | convertToGFA.py
+SGA sga index | sga filter | sga overlap | sga assemble
+Denoise
+ABySS abyss-filtergraph
+lh3/gfa1 gfaview -t
+Collapse variants
+ABySS PopBubbles | MergeContigs
+lh3/gfa1 gfaview -b
+Map reads
+ABySS abyss-map
+BGREAT2 bgreat
+BWA bwa mem
+EMA ema align for linked reads
+Long Ranger longranger align for linked reads
+Minimap2 minimap2
+Unicycler unicycler_align
+Estimate copy number
+SGA sga-astat.py
+Link unitigs
+ABySS abyss-fixmate | DistanceEst for paired-end and mate-pair reads
+ABySS abyss-longseqdist for long reads
+ARCS arcs for linked reads
+Order and orient
+ABySS abyss-scaffold or SimpleGraph | MergePaths
+SGA sga scaffold
+Contract paths
+ABySS MergeContigs
+SGA sga scaffold2fasta
+Fill gaps
+ABySS abyss-sealer
+Polish
+Nanopolish for Nanopore reads
+Pilon for short reads
+Racon for long reads
+Tigmint to correct large-scale misassemblies with linked reads
+Visualize the assembly graph
+Bandage
+Assess assembly quality
+ABySS abyss-fac and abyss-samtobreak
+QUAST
+Pipelines
+The data is from Unicycler: "These are synthetic reads from plasmids A, B and E from the Shigella sonnei 53G genome assembly". Shigella sonnei plasmids (synthetic reads), short_reads_1.fastq.gz, short_reads_2.fastq.gz
+
+ABySS
+Assemble paired-end reads using ABySS. This ABySS pipeline is a minimal subset of tools run by the complete abyss-pe pipeline.
+
+cd components
+k=99
+./download_test_data.sh
+./abyss_unitigs.sh 0_pe.fq.gz $k
+./abyss_contigs_from_unitigs.sh 1_unitig.gfa2 1_unitig.fa $k
+./abyss_scaffolding.sh 6_contigs.fa 6_contigs.gfa $k
+# Visualize the assembly graph
+Bandage load 9_assembly.gfa1 &
+BCALM+ABySS
+This assembles reads using BCALM for unitigs, then uses the rest of the ABySS pipeline from the previous example.
+
+cd components
+k=99
+./download_test_data.sh
+./bcalm.sh 0_pe.fq.gz $k
+./abyss_contigs_from_unitigs.sh 1_unitig.gfa2 1_unitig.fa $k
+./abyss_scaffolding.sh 6_contigs.fa 6_contigs.gfa $k
+# Visualize the assembly graph
+Bandage load 9_assembly.gfa1 &
+Components
+Download test data
+components/download_test_data.sh
+# Download Unicycler test data
+# input: nothing
+# output: 0_pe.fq.gz
+
+#install dependencies
+brew install seqtk curl
+
+seqtk mergepe <(curl -Ls https://github.com/rrwick/Unicycler/raw/master/sample_data/short_reads_1.fastq.gz) <(curl -Ls https://github.com/rrwick/Unicycler/raw/master/sample_data/short_reads_2.fastq.gz) | gzip >0_pe.fq.gz
+--
+
+From reads to unitigs with BCALM
+components/bcalm.sh
+# input: [reads] [k]
+# e.g. 0_pe.fq.gz 99
+#
+# output: 1_unitig.gfa2
+# contains unitigs created by BCALM
+
+# make sure bcalm and convertToGFA.py are in your path (will later be automatically done by 'conda install bcalm' when someone makes bcalm availaon conda)
+
+reads=$1
+k=$2
+
+# Install the dependencies
+pip install gfapy
+# Unitig with BCALM
+bcalm -in $1 -out 1_bcalm -kmer-size $k -abundance-min 1 -verbose 0
+mv 1_bcalm.unitigs.fa 1_unitig.fa
+convertToGFA.py 1_unitig.fa 1_unitig.gfa $k
+# convert bcalm output to gfa2
+(printf "H\tVN:Z:1.0\n"; tail -n +2 1_unitig.gfa) >1_unitig.gfa1
+gfapy-convert 1_unitig.gfa1 > 1_unitig.gfa2
+
+# cleanup
+rm -f 1_bcalm*glue* 1_bcalm.h5
+--
+
+From reads to unitigs with ABySS
+components/abyss_unitigs.sh
+# input: [reads] [k]
+# e.g. 0_pe.fq.gz 99
+#
+# output: 1_unitig.gfa2 1_unitig.fa
+# contains unitigs created by abyss
+
+reads=$1
+k=$2
+
+# setting up
+brew install abyss
+
+# Unitig
+gunzip -c $reads | ABYSS -k$k -t0 -c0 -b0 -o 1_unitig.fa -
+AdjList --gfa2 -k$k 1_unitig.fa >1_unitig.gfa 
+mv 1_unitig.gfa 1_unitig.gfa2
+--
+
+From unitigs to contigs with ABySS
+components/abyss_contigs_from_unitigs.sh
+# input: [unitigs.gfa2] [unitigs.fa] [k]
+# e.g. 1_unitig.gfa2 1_unitigs.fa 100
+#
+# output: 6_contigs.gfa and 6_contigs.fa
+# contigs produced by ABySS
+
+unitigs_gfa2=$1
+unitigs_fa=$2
+k=$3
+
+# install dependencies
+brew install abyss pigz samtools
+
+# Denoise
+abyss-filtergraph --gfa2 -k$k -t200 -c3 -g 2_denoise.gfa $unitigs_gfa2
+# Collapse variants
+PopBubbles --gfa2 -k$k -p0.99 -g 3_debulge.gfa $unitigs_fa 2_denoise.gfa >3_debulge.path
+MergeContigs --gfa2 -k$k -g 3_debulge.gfa -o 3_debulge.fa $unitigs_fa 2_denoise.gfa 3_debulge.path
+# Map reads
+gunzip -c 0_pe.fq.gz | abyss-map - 3_debulge.fa | pigz >3_debulge.sam.gz
+# Link unitigs
+gunzip -c 3_debulge.sam.gz | abyss-fixmate -h 4_link.tsv | samtools sort -Osam | DistanceEst --dist -k$k -s500 -n1 4_link.tsv >4_link.dist
+# Resolve repeats
+samtools faidx 3_debulge.fa
+SimpleGraph -k$k -s500 -n5 -o 5_resolverepeats-1.path 3_debulge.gfa 4_link.dist
+MergePaths -k$k -o 5_resolverepeats.path 3_debulge.fa.fai 5_resolverepeats-1.path
+# Contract paths
+MergeContigs --gfa2 -k$k -g 6_contigs.gfa -o 6_contigs.fa 3_debulge.fa 3_debulge.gfa 5_resolverepeats.path
+
+# cleanup (comment to keep files)
+rm -f 5_resolverepeats.path 3_debulge.gfa 3_debulge.fa 3_debulge.fa.fai 3_debulge.path 5_resolverepeats-1.path 4_link.dist 4_link.tsv 2_denoise.gfa 3_debulge.sam.gz 
+--
+
+From contigs to scaffolds with ABySS
+components/abyss_scaffolding.sh
+# input: [contigs.fa] [contigs.gfa] [k]
+# e.g. 6_contigs.fa 6_contigs.gfa 99
+# 
+# output: 9_assembly.gfa and 9_assembly.gfa1
+# scaffolds assembly using abyss scaffolder in GFA2 and GFA1 format
+
+contigs_fa=$1
+contigs_gfa=$2
+k=$3
+
+# Map reads
+gunzip -c 0_pe.fq.gz | abyss-map - $contigs_fa | pigz >6_contigs.sam.gz
+# Link unitigs
+gunzip -c 6_contigs.sam.gz | abyss-fixmate -h 7_link.tsv | samtools sort -Osam | DistanceEst --dot -k$k -s500 -n1 7_link.tsv >7_link.gv
+# Order and orient
+abyss-scaffold -k$k -s500-1000 -n5-10 $contigs_gfa 7_link.gv >8_scaffold.path
+# Contract paths
+MergeContigs --gfa2 -k$k -g 9_assembly.gfa -o 9_assembly.fa $contigs_fa $contigs_gfa 8_scaffold.path
+# Compute assembly metrics
+abyss-fac 9_assembly.fa
+# Convert GFA2 to GFA1
+abyss-todot --gfa1 9_assembly.gfa >9_assembly.gfa1
+
+# cleanup (comment to remove)
+rm -f 6_contigs.sam.gz 7_link.gv 7_link.tsv 8_scaffold.path 8_scaffold.path
