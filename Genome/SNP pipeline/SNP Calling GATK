@@ -1,0 +1,173 @@
+for i in ${fastqFolder}/*_1.fastq.gz
+do
+ filename=$(basename $i _1.fastq.gz)
+ mapFile=${workPath}/${filename}_bwa.bam
+ mapped[${#mapped[*]}]=$mapFile
+ bwa mem -t 160 -Ma \
+ -R @RG\\tID:${filename}\\tSM:${filename}\\tPL:ILM\\
+tLB:${filename} \
+ $ref $i ${i%1.fastq.gz}2.fastq.gz \
+ |samtools sort - -@ 40 -n -m 4G -T ${i%R1.fastq.gz} -o $mapFile
+done
+
+
+
+for mapFile in ${mapped[*]}
+do
+gatk --java-options “-Xmx20G -XX:+UseParallelGC \
+ -XX:ParallelGCThreads=4” MarkDuplicates \
+ -I ${mapFile} -O ${mapFile%.bam}_dedup.bam \
+ -M ${mapFile%_bwa.bam}.duplicate_metrics \
+ --MAX_RECORDS_IN_RAM 5000000 -MAX_SEQS 5000000 \
+ --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \
+ --VALIDATION_STRINGENCY SILENT \
+ -MAX_FILE_HANDLES 1000
+done
+
+
+b) Use SAMtools
+for mapFile in ${mapped[*]}
+do
+ samtools fixmate -m -@ 40 ${mapFile} fixmate.bam
+ samtools sort -@ 40 -m 6G -o sorted.bam fixmate.bam
+ samtools markdup -s -@ 40 sorted.bam ${mapFile%.bam}_dedup.bam
+ samtools index -@ 40 ${mapFile%.bam}_dedup.bam
+done
+
+c) Use sam2bam
+for mapFile in ${mapped[*]}
+do
+ export use_storage_mode=yes
+ export BAM_PAGEFILE=$workPath/pf
+ sam2bam sam2bam -d -p -Fibm_markdup:r \
+ -o${mapFile%.bam}_dedup.bam ${mapFile%bam}sam
+done
+
+a) Use split-sequence intervals
+for mapFile in ${mapped[*]}
+do
+ for i in `seq -f ‘%04g’ 0 39`
+ do
+ outfile=${mapFile%.bam}_dedup_recal_data_$i.table
+ gatk --java-options “-Xmx4G -XX:+UseParallelGC \
+ -XX:ParallelGCThreads=4” BaseRecalibrator \
+ -L $i-scattered.interval_list -R $ref \
+ -I ${mapFile%.bam}_dedup.bam $knownSiteArg -O $outfile &
+ done
+ wait
+ for i in `seq -f ‘%04g’ 0 39`
+ do
+ bqfile=${mapFile%.bam}_dedup_recal_data_$i.table
+ output=${mapFile%.bam}_dedup_recal_$i.bam
+ gatk --java-options “-Xmx4G -Xmx4G -XX:+UseParallelGC \
+ -XX:ParallelGCThreads=4” ApplyBQSR -R $ref \
+ -I ${mapFile%.bam}_dedup.bam \
+ -L $i-scattered.interval_list -bqsr $bqfile \
+ --static-quantized-quals 10 --static-quantized-quals 20 \
+ --static-quantized-quals 30 -O $output &
+ done
+ wait
+done
+
+b) Use the Spark mode
+for mapFile in ${mapped[*]}
+do
+ gatk --java-options “-Xmx8G -XX:+UseParallelGC \
+ -XX:ParallelGCThreads=4” BaseRecalibratorSpark \
+-R $ref -I ${mapFile%.bam}_dedup.bam $knownSiteArg \
+-O ${mapFile%.bam}_dedup_recal_data.table \
+-- --spark-runner LOCAL --spark-master local[40] \
+--conf spark.local.dir=$workPath
+ gatk --java-options “-Xmx8G -XX:+UseParallelGC \
+-XX:ParallelGCThreads=4” ApplyBQSRSpark -R $ref \
+-I ${mapFile%.bam}_dedup.bam -bqsr $bqfile \
+--static-quantized-quals 10 --static-quantized-quals 20 \
+--static-quantized-quals 30 -O $output \
+-- --spark-runner LOCAL --spark-master local[40] \
+--conf spark.local.dir=$workPath
+done
+
+b) Use the Spark mode
+for mapFile in ${mapped[*]}
+do
+ gatk --java-options “-Xmx8G -XX:+UseParallelGC \
+ -XX:ParallelGCThreads=4” BaseRecalibratorSpark \
+-R $ref -I ${mapFile%.bam}_dedup.bam $knownSiteArg \
+-O ${mapFile%.bam}_dedup_recal_data.table \
+-- --spark-runner LOCAL --spark-master local[40] \
+--conf spark.local.dir=$workPath
+ gatk --java-options “-Xmx8G -XX:+UseParallelGC \
+-XX:ParallelGCThreads=4” ApplyBQSRSpark -R $ref \
+-I ${mapFile%.bam}_dedup.bam -bqsr $bqfile \
+--static-quantized-quals 10 --static-quantized-quals 20 \
+--static-quantized-quals 30 -O $output \
+-- --spark-runner LOCAL --spark-master local[40] \
+--conf spark.local.dir=$workPath
+done
+
+# Combinge gvcf files (optional)
+gatk --java-options “-Xmx4G” GatherVcfs -R $ref $gvcfFilesArg \
+ -O ${vcfFile%vcf}g.vcf
+# genotype gvcf files
+for i in `seq -f ‘%04g’ 0 39`
+do
+ gatk --java-options “-Xmx4G -XX:+UseParallelGC 
+-XX:ParallelGCThreads=4” \
+ GenotypeGVCFs -R $ref -V ${mapFile%.bam}_dedup_recal_$i.g.vcf \
+ -L $REF_HOME/intervals/40c/$i-scattered.interval_list \
+ -O ${vcfFile%.vcf}_$i.vcf &
+done
+wait
+# merge scattered phenotype vcf files
+gatk --java-options “-Xmx4G” GatherVcfs -R $ref $vcfFilesArg -O 
+$vcfFil
+
+# VARIANT QUALITY SCORE RECALIBRATION - SNPs 
+gatk --java-options “-Xmx4G -XX:+UseParallelGC 
+-XX:ParallelGCThreads=40” \
+ VariantRecalibrator -V $vcfFile -O recalibrate_SNP.recal \
+ -mode SNP --tranches-file recalibrate_SNP.tranches \
+ -tranche 100.0 -tranche 99.9 -tranche 99.0 -tranche 90.0 -an 
+QD -an FS \
+ -an MQRankSum -an ReadPosRankSum -an SOR -an MQ --maxgaussians 6 \
+ 
+-resource:hapmap,known=false,training=true,truth=true,prior=15.0 
+$vcfHapmap \
+ -resource:omni,known=false,training=true,truth=true,prior=12.0 
+$vcfOmni \
+ 
+-resource:1000G,known=false,training=true,truth=false,prior=10.0 
+$vcfGlk \
+ -resource:dbsnp,known=true,training=false,truth=false,prior=7.0 
+$vcfDbsnp
+# Apply recalibration to SNPs 
+gatk --java-options “-Xmx4G -XX:+UseParallelGC \
+ -XX:ParallelGCThreads=20” ApplyVQSR -V $vcfFile \
+ -O recalibrated_snps_raw_indels.vcf --recal-file recalibrate_
+SNP.recal \
+ --tranches-file recalibrate_SNP.tranches \
+ -truth-sensitivity-filter-level 99.5 --create-output-variantindex true \
+ -mode SNP
+# Run Variant Recalibrator – Indels 
+gatk --java-options “-Xmx4G -XX:+UseParallelGC 
+-XX:ParallelGCThreads=40” \
+ VariantRecalibrator -V recalibrated_snps_raw_indels.vcf \
+ -O $recalibrate_INDEL.recal \
+ -mode INDEL --tranches-file recalibrate_INDEL.tranches \
+ -tranche 100.0 -tranche 99.9 -tranche 99.0 -tranche 90.0 -an 
+QD \
+ -an FS -an MQRankSum -an ReadPosRankSum -an SOR --maxgaussians 4 \
+ -resource:mills,known=false,training=true,truth=true,prior=12.0 
+$vcfMills \
+ -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 
+$vcfDbsnp
+# Apply recalibration to Indels 
+gatk --java-options “-Xmx4G -XX:+UseParallelGC 
+-XX:ParallelGCThreads=20” \
+ ApplyVQSR -V recalibrated_snps_raw_indels.vcf \
+ -O ${vcfFile%.vcf}.recal.vcf --recal-file recalibrate_INDEL.
+recal \
+ --tranches-file recalibrate_INDEL.tranches \
+ -truth-sensitivity-filter-level 99.0 \
+ --create-output-variant-index true -mode INDEL
+
