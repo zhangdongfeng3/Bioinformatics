@@ -1,0 +1,185 @@
+nohup gatk AddOrReplaceReadGroups -I 1W.sort.bam -O Freebayes/1W.sort.add.bam -ID 1 -LB group1 -PL Illumina -PU run0 -SM 1W &
+
+nohup gatk AddOrReplaceReadGroups -I 2Mu.sort.bam -O Freebayes/2Mu.sort.add.bam -ID 2 -LB group2 -PL Illumina -PU run1 -SM 2Mu &
+
+nohup gatk AddOrReplaceReadGroups -I 3-WTP.sort.bam -O Freebayes/3-WTP.sort.add.bam -ID 3 -LB group3 -PL Illumina -PU run2 -SM 3-WTP &
+
+nohup gatk AddOrReplaceReadGroups -I 4-MTP.sort.bam -O Freebayes/4-MTP.sort.add.bam -ID 4 -LB group4 -PL Illumina -PU run3 -SM 4-MTP &
+
+
+nohup gatk --java-options "-Xmx20G -XX:+UseParallelGC -XX:ParallelGCThreads=12" AddOrReplaceReadGroups -I 3-WTP.sort.bam -O 3-WTP.sort.add.bam -LB group3 -PL Illumina -PU run2 -SM 3-WTP &
+ -I ${mapFile} -O ${mapFile%.bam}_dedup.bam \
+ -M ${mapFile%_bwa.bam}.duplicate_metrics \
+ --MAX_RECORDS_IN_RAM 5000000 -MAX_SEQS 5000000 \
+ --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \
+ --VALIDATION_STRINGENCY SILENT \
+ -MAX_FILE_HANDLES 1000
+ 
+
+
+nohup gatk MarkDuplicates --java-options "-Xmx20G -XX:+UseParallelGC -XX:ParallelGCThreads=12" --REMOVE_DUPLICATES true -I 1W.sort.add.bam -O 1W.sort.add.rm.bam -M 1W.metrics &
+
+nohup gatk MarkDuplicates --java-options "-Xmx20G -XX:+UseParallelGC -XX:ParallelGCThreads=12" --REMOVE_DUPLICATES true -I 2Mu.sort.add.bam -O 2Mu.sort.add.rm.bam -M 2Mu.metrics &
+
+nohup gatk MarkDuplicates --java-options "-Xmx20G -XX:+UseParallelGC -XX:ParallelGCThreads=12" --REMOVE_DUPLICATES true -I 3-WTP.sort.add.bam -O 3-WTP.sort.add.rm.bam -M 3-WTP.metrics &
+
+nohup gatk MarkDuplicates --java-options "-Xmx20G -XX:+UseParallelGC -XX:ParallelGCThreads=12" --REMOVE_DUPLICATES true -I 4-MTP.sort.add.bam -O 4-MTP.sort.add.rm.bam -M 4-MTP.metrics &
+ 
+samtools index 1W.sort.add.rm.bam -@ 70
+
+samtools index 2Mu.sort.add.rm.bam -@ 70
+
+samtools index 3-WTP.sort.add.rm.bam -@ 70
+
+samtools index 4-MTP.sort.add.rm.bam -@ 70 
+
+gatk CreateSequenceDictionary -f R498_Final_Version2.soft.fasta
+
+nohup gatk --java-options "-Xmx4G \
+ -XX:+UseParallelGC -XX:ParallelGCThreads=16" HaplotypeCaller \
+ -R R498_Final_Version2.soft.fasta -I 1W.sort.add.rm.bam \
+ --native-pair-hmm-threads 16 \
+ -O 1W.gvcf -ERC GVCF -stand-call-conf 10 &
+ 
+nohup gatk --java-options "-Xmx4G \
+ -XX:+UseParallelGC -XX:ParallelGCThreads=16" HaplotypeCaller \
+ -R R498_Final_Version2.soft.fasta -I 2Mu.sort.add.rm.bam \
+ --native-pair-hmm-threads 16 \
+ -O 2Mu.gvcf -ERC GVCF -stand-call-conf 10 &
+ 
+nohup gatk --java-options "-Xmx4G \
+ -XX:+UseParallelGC -XX:ParallelGCThreads=16" HaplotypeCaller \
+ -R R498_Final_Version2.soft.fasta -I 3-WTP.sort.add.rm.bam \
+ --native-pair-hmm-threads 16 \
+ -O 3-WTP.gvcf -ERC GVCF -stand-call-conf 10 &
+ 
+nohup gatk --java-options "-Xmx4G \
+ -XX:+UseParallelGC -XX:ParallelGCThreads=16" HaplotypeCaller \
+ -R R498_Final_Version2.soft.fasta -I 4-MTP.sort.add.rm.bam \
+ --native-pair-hmm-threads 16 \
+ -O 4-MTP.gvcf -ERC GVCF -stand-call-conf 10 &
+
+nohup gatk --java-options "-Xmx4G \
+-XX:+UseParallelGC -XX:ParallelGCThreads=16" CombineGVCFs \
+-R R498_Final_Version2.soft.fasta --variant 1W.gvcf \
+--variant 2Mu.gvcf --variant 3-WTP.gvcf --variant 4-MTP.gvcf -O gatksnp.gvcf &
+
+nohup gatk --java-options "-Xmx4G \
+-XX:+UseParallelGC -XX:ParallelGCThreads=16" GenotypeGVCFs \
+-R R498_Final_Version2.soft.fasta --variant gatksnp.gvcf \
+-O gatksnp.vcf &
+
+nohup gatk SelectVariants -V gatksnp.vcf -O gatksnp.SNP.vcf \
+-select-type SNP -R R498_Final_Version2.soft.fasta &
+
+
+nohup gatk FilterVcf -I gatksnp.SNP.vcf -O gatksnp.SNP.filter.vcf \
+--MIN_DP 30 --MIN_GQ 50 & 
+
+nohup gatk SelectVariants -V gatksnp.SNP.filter.vcf -O gatksnp.SNP.filter2.vcf \
+-sn 3-WTP -sn 4-MTP -R R498_Final_Version2.soft.fasta &
+
+nohup gatk VariantsToTable \
+-R R498_Final_Version2.soft.fasta \
+-V gatksnp.SNP.filter2.vcf \
+-F CHROM -F POS -F REF -F ALT \
+-GF AD -GF DP -GF GQ -GF PL \
+-O gatksnp.SNP.filter2.table &
+
+rawData <- system.file(
+     "extdata", 
+     "Yang_et_al_2013.table", 
+     package = "Yang2013data", 
+    mustWork = TRUE)
+
+HighBulk <- "SRR834931"
+LowBulk <- "SRR834927"
+Chroms <- paste0(rep("Chr", 12), 1:12)
+
+df <-
+    importFromGATK(
+        file = rawData,
+        highBulk = HighBulk,
+        lowBulk = LowBulk,
+        chromList = Chroms
+     )
+	 
+df_filt <-
+    filterSNPs(
+        SNPset = df,
+        refAlleleFreq = 0.20,
+        minTotalDepth = 100,
+        maxTotalDepth = 400, 
+        depthDifference = 100,
+        minSampleDepth = 40,
+        minGQ = 99,
+        verbose = TRUE
+    )
+
+	df_filt <- runGprimeAnalysis(df_filt,
+    windowSize = 1e6,
+    outlierFilter = "deltaSNP",
+    filterThreshold = 0.1)
+	
+	plotGprimeDist(SNPset =df_filt, outlierFilter = "deltaSNP", filterThreshold = 0.1)
+results <- getQTLTable(SNPset = df_filt, method = "Gprime",alpha = 0.01, export = TRUE, fileName = "D:/BaiduNetdiskDownload/test.results")
+rawfile<-"D:/BaiduNetdiskDownload/gatksnp.SNP.filter2.table"
+HighBulk <- "4-MTP"
+LowBulk <- "3-WTP"
+Chroms <- paste0(rep("Chr", 12), 1:12)
+
+
+df <-importFromGATK(file = rawfile, highBulk = HighBulk,lowBulk = LowBulk, chromList = Chroms)
+
+library("ggplot2")
+ggplot(data = df) + 
+    geom_histogram(aes(x = DP.HIGH + DP.LOW)) + 
+    xlim(0,1000)
+
+df_filt <-
+    filterSNPs(
+        SNPset = df,
+        refAlleleFreq = 0.20,
+        minTotalDepth = 100,
+        maxTotalDepth = 400,
+        minSampleDepth = 40,
+        minGQ = 99
+    )
+	
+df_filt <- runGprimeAnalysis(
+    SNPset = df_filt,
+    windowSize = 1e6,
+    outlierFilter = "deltaSNP")
+	
+df_filt <- runQTLseqAnalysis(
+    SNPset = df_filt,
+    windowSize = 1e6,
+    popStruc = "F2",
+    bulkSize = c(25, 25),
+    replications = 10000,
+    intervals = c(95, 99)
+)
+
+plotQTLStats(SNPset = df_filt, var = "deltaSNP", plotIntervals = TRUE)
+
+
+
+nohup freebayes-parallel <(fasta_generate_regions.py R498_Final_Version2.soft.fasta.fai 500000) 50 \
+-f R498_Final_Version2.soft.fasta -b 2Mu.sort.add.rm.bam \
+-b 1W.sort.add.rm.bam 3-WTP.sort.add.rm.bam 4-MTP.sort.add.rm.bam > Freebayesout.vcf &
+
+freebayes-parallel <(fasta_generate_regions.py R498_Final_Version2.soft.fasta.fai 500000) 30 \
+-f R498_Final_Version2.soft.fasta -b 1W.sort.add.rm.bam --gvcf > Freebayesout1W.gvcf 
+
+
+
+
+
+nohup freebayes-parallel <(fasta_generate_regions.py R498_Final_Version2.soft.fasta.fai 100000) 70 -f R498_Final_Version2.soft.fasta -L bamlist > Freebayesout.vcf &
+
+
+#####samtools calling snp
+
+nohup \
+bcftools mpileup -f R498_Final_Version2.soft.fasta -b bamlist | bcftools call -cv -o bcfsnp.vcf \
+&
